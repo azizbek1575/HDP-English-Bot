@@ -3,7 +3,7 @@ const { Telegraf, Markup } = require('telegraf');
 const store = require('./storage');
 
 if (!process.env.BOT_TOKEN) {
-    console.error('BOT_TOKEN topilmadi! .env fayliga yoki server o‘zgaruvchilariga yozing.');
+    console.error('8911434352:AAEYcOnr20dzGn6AfxOKxNpPgpCGDbqyJls');
     process.exit(1);
 }
 
