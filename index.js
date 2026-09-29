@@ -3,7 +3,7 @@ const { Telegraf, Markup } = require('telegraf');
 const store = require('./storage');
 
 if (!process.env.BOT_TOKEN) {
-    console.error('8911434352:AAEYcOnr20dzGn6AfxOKxNpPgpCGDbqyJls');
+    console.error('8911434352:AAF16mni5LYKzaZa679fE2TH4Daka2OnnyM');
     process.exit(1);
 }
 
