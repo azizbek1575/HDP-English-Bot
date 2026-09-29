@@ -1,6 +1,16 @@
+require('dotenv').config();
 const { Telegraf, Markup } = require('telegraf');
+const store = require('./storage');
 
-const bot = new Telegraf('8911434352:AAEYcOnr20dzGn6AfxOKxNpPgpCGDbqyJls');
+if (!process.env.BOT_TOKEN) {
+    console.error('BOT_TOKEN topilmadi! .env fayliga yoki server o‘zgaruvchilariga yozing.');
+    process.exit(1);
+}
+
+const bot = new Telegraf(process.env.BOT_TOKEN);
+
+// 🔤 Tarjima va 🧩 So‘z tuzish o‘yinlari (boshqa handlerlardan OLDIN turishi kerak)
+require('./soz_oyini')(bot, { Markup, shuffle, mainMenu, getTopics: () => topics });
 
 // Savol yasash uchun yordamchi: matn, o'zbekcha tarjima, variantlar, to'g'ri javob
 const Q = (text, uz, options, answer) => [
@@ -76,7 +86,7 @@ B — harf.`,
             Q('S harfi inglizcha qanday o‘qiladi?', null, ['es','is','si','ef'], 'es'),
             Q('T harfi inglizcha qanday o‘qiladi?', null, ['ti','di','pi','si'], 'ti'),
             Q('U harfi inglizcha qanday o‘qiladi?', null, ['yu','u','ou','vi'], 'yu'),
-            Q('V harfi inglizcha qanday o‘qiladi?', null, ['vi','bi','dablyu','vey'], 'vi'),
+            Q('V harfi inglizcha qanday o‘qiladi?', null, ['vi','bi','dablyu','wi'], 'vi'),
             Q('W harfi inglizcha qanday o‘qiladi?', null, ['dablyu','vi','yu','way'], 'dablyu'),
             Q('X harfi inglizcha qanday o‘qiladi?', null, ['eks','iks','ks','es'], 'eks'),
             Q('Y harfi inglizcha qanday o‘qiladi?', null, ['way','yu','ay','vi'], 'way'),
@@ -628,11 +638,17 @@ I / You / We / They → HAVE`,
     }
 };
 
+// Qiyinroq qo'shimcha savollarni (qoshimcha.js) mavzularga qo'shish
+const extra = require('./qoshimcha');
+Object.keys(extra).forEach(name => {
+    if (topics[name]) topics[name].questions.push(...extra[name]);
+});
+
 
 // ==================== FOYDALANUVCHILAR ====================
 
 const users = {};
-const ranking = {};
+const ranking = store.load();   // natijalar data.json faylida saqlanadi
 const lastTest = {};
 
 
@@ -658,6 +674,7 @@ function mainMenu() {
     return Markup.keyboard([
         ['📚 Mavzular', '📝 Test'],
         ['⚡ Tezkor test', '📊 Natijam'],
+        ['🔤 Tarjima', '🧩 So‘z tuzish'],
         ['❌ Xatolarim', '🏆 Reyting']
     ]).resize();
 }
@@ -723,6 +740,35 @@ function buildQuestions(pool, amount) {
     return questions.slice(0, amount);
 }
 
+// Umumiy test: savollar HAR BIR mavzudan navbatma-navbat olinadi
+function buildGeneralQuestions(amount) {
+    const pools = shuffle(Object.keys(topics)).map(name =>
+        shuffle(topics[name].questions).map(q => {
+            const item = [...q];
+            item.topic = name;
+            return item;
+        })
+    );
+
+    const result = [];
+    let round = 0;
+
+    while (result.length < amount) {
+        let added = false;
+        for (const pool of pools) {
+            if (result.length >= amount) break;
+            if (pool[round]) {
+                result.push(pool[round]);
+                added = true;
+            }
+        }
+        if (!added) break;
+        round++;
+    }
+
+    return shuffle(result);
+}
+
 function startTest(ctx, topicName, amount) {
 
     const topic = topics[topicName];
@@ -755,16 +801,10 @@ Test boshlandi!
 
 function startGeneralTest(ctx, amount) {
 
-    let allQuestions = [];
-
-    Object.keys(topics).forEach(topicName => {
-        allQuestions.push(...topics[topicName].questions);
-    });
-
     users[ctx.from.id] = {
         topic: 'Umumiy test',
         general: true,
-        questions: buildQuestions(allQuestions, amount),
+        questions: buildGeneralQuestions(amount),
         index: 0,
         correct: 0,
         wrongAnswers: [],
@@ -777,7 +817,7 @@ function startGeneralTest(ctx, amount) {
     ctx.reply(
         `📝 UMUMIY TEST
 
-📚 ${amount} ta savol`
+📚 ${amount} ta savol (barcha mavzulardan)`
     );
 
     sendQuestion(ctx);
@@ -803,6 +843,8 @@ function sendQuestion(ctx) {
     user.current = shuffle(q[1]);
     user.locked = false;
 
+    const label = q.topic ? `📌 ${q.topic}\n` : '';
+
     const hint = q[0].includes('___')
         ? '✍️ Bo‘sh joyga to‘g‘ri so‘zni tanlang:\n\n'
         : '';
@@ -818,7 +860,7 @@ function sendQuestion(ctx) {
 
     ctx.reply(
         `📝 Savol ${user.index + 1}/${user.questions.length}
-
+${label}
 ${hint}${q[0]}`,
         Markup.inlineKeyboard(rows)
     );
@@ -892,7 +934,7 @@ bot.on('callback_query', async (ctx) => {
         return;
     }
 
-    // JAVOB
+    // JAVOB — natija alohida xabar emas, savol xabarining o‘zida ko‘rsatiladi
 
     if (data.startsWith('answer:')) {
 
@@ -906,40 +948,37 @@ bot.on('callback_query', async (ctx) => {
         if (user.locked) return;
         user.locked = true;
 
-        await ctx.editMessageReplyMarkup({ inline_keyboard: [] }).catch(() => {});
-
         const q = user.questions[user.index];
         if (!q) return;
 
         const selected = user.current[parseInt(data.substring(7), 10)];
+        const firstLine = q[0].split('\n')[0];
+        let resultText;
 
         if (selected === q[2]) {
 
             user.correct++;
-            ctx.reply('✅ To‘g‘ri!');
+            resultText = `✅ To‘g‘ri: ${selected}`;
 
         } else {
 
             user.wrongAnswers.push({
-                question: q[0].split('\n')[0],
+                question: firstLine,
                 selected: selected,
                 correct: q[2]
             });
 
-            const firstLine = q[0].split('\n')[0];
-            const fullSentence = firstLine.includes('___')
-                ? `\n\n📖 To‘g‘ri gap: ${firstLine.replace('___', q[2])}`
+            const full = firstLine.includes('___')
+                ? `\n📖 ${firstLine.replace('___', q[2])}`
                 : '';
 
-            ctx.reply(
-                `❌ Xato!
-
-Sizning javobingiz: ${selected}
-
-To‘g‘ri javob: ${q[2]}${fullSentence}`
-            );
+            resultText = `❌ Siz: ${selected}\n✅ To‘g‘ri: ${q[2]}${full}`;
 
         }
+
+        await ctx.editMessageText(
+            `📝 Savol ${user.index + 1}/${user.questions.length}\n\n${q[0]}\n\n${resultText}`
+        ).catch(() => {});
 
         user.index++;
         sendQuestion(ctx);
@@ -1100,6 +1139,9 @@ function finishTest(ctx) {
     result.wrong += wrong;
     result.total += total;
     result.errors.push(...user.wrongAnswers);
+    result.errors = result.errors.slice(-50);   // fayl kattalashib ketmasligi uchun
+
+    store.save(ranking);
 
     const backTarget = user.general ? 'menu' : 'topics';
 
@@ -1140,9 +1182,17 @@ bot.catch((err) => {
 
 // ==================== BOTNI ISHGA TUSHIRISH ====================
 
-bot.launch();
+bot.launch().catch(err => {
+    console.error('Bot ishga tushmadi:', err);
+    process.exit(1);
+});
 
 console.log('🇬🇧 HDP English bot ishga tushdi!');
 
-process.once('SIGINT', () => bot.stop('SIGINT'));
-process.once('SIGTERM', () => bot.stop('SIGTERM'));
+const stop = (signal) => {
+    store.saveNow(ranking);
+    bot.stop(signal);
+};
+
+process.once('SIGINT', () => stop('SIGINT'));
+process.once('SIGTERM', () => stop('SIGTERM'));
